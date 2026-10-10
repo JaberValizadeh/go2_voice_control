@@ -1,0 +1,86 @@
+<launch>
+  <arg name="device" default="default"/>
+  <arg name="model_path" default="$(env HOME)/vosk-model-small-en-us-0.15"/>
+  <arg name="gain" default="1.0"/>
+  <arg name="command_timeout" default="5.0"/>
+  <arg name="cmd_vel_topic" default="/cmd_vel"/>
+  <arg name="use_stair_scanner" default="true"/>
+  <arg name="start_recognizer" default="true"/>
+  <arg name="stair_foot"     default="[2.20, 0.0]"/>
+  <arg name="stair_top"      default="[4.00, 0.0]"/>
+  <arg name="stair_bottom_z" default="0.30"/>
+  <arg name="stair_top_z"    default="0.75"/>
+  <arg name="stair_heading"  default="0.0"/>
+  <!-- Which Gazebo model the teleop asks for a pose. Defaults to the Go2 so
+       this file keeps working on its own; sim.launch overrides it. -->
+  <arg name="model_name"     default="unitree_go2"/>
+  <arg name="stair_clearance" default="0.045"/>
+  <arg name="stair_max_swing" default="0.18"/>
+  <arg name="linear_speed"     default="0.60"/>
+  <arg name="stair_walkup_speed" default="0.0"/>
+  <arg name="max_linear_speed" default="0.65"/>
+
+  <node pkg="go2_voice_control" type="voice_recognizer.py"
+        name="voice_recognizer" output="screen"
+        if="$(arg start_recognizer)">
+    <!-- Without this the node's startup logging is buffered and the
+         "Listening for voice commands" line never appears. -->
+    <env name="PYTHONUNBUFFERED" value="1"/>
+    <param name="device" value="$(arg device)"/>
+    <param name="model_path" value="$(arg model_path)"/>
+    <param name="gain" value="$(arg gain)"/>
+  </node>
+
+  <node pkg="go2_voice_control" type="voice_teleop.py"
+        name="go2_voice_teleop" output="screen">
+    <env name="PYTHONUNBUFFERED" value="1"/>
+    <remap from="cmd_vel" to="$(arg cmd_vel_topic)"/>
+    <param name="model_name" value="$(arg model_name)"/>
+    <!-- How fast "move forward" asks for. Robot-specific, and passed in by
+         sim.launch: the Go2's gait was measured at 0.60 m/s with only 8 mm
+         of trunk bob, and Nova-Q's saturates well below that (see the note
+         at the Nova-Q values in sim.launch). Reverse keeps its own slow,
+         stable speed on both. -->
+    <param name="linear_speed" value="$(arg linear_speed)"/>
+    <param name="backward_speed" value="0.20"/>
+    <param name="angular_speed" value="0.4"/>
+    <param name="max_linear_speed" value="$(arg max_linear_speed)"/>
+    <param name="max_angular_speed" value="0.8"/>
+    <param name="command_timeout" value="$(arg command_timeout)"/>
+    <!-- Where the level change is. Given rather than discovered: a
+         horizontal lidar at knee height sees a rising surface as a wall, so
+         this robot cannot find a flight by looking for one. -->
+    <rosparam param="stair_foot" subst_value="true">$(arg stair_foot)</rosparam>
+    <rosparam param="stair_top"  subst_value="true">$(arg stair_top)</rosparam>
+    <param name="stair_bottom_z" value="$(arg stair_bottom_z)"/>
+    <param name="stair_top_z"    value="$(arg stair_top_z)"/>
+    <param name="stair_heading"  value="$(arg stair_heading)"/>
+    <param name="stair_speed"    value="0.30"/>
+    <param name="stair_descent_speed" value="0.18"/>
+    <!-- Trot speed for the flat walk-up to the first riser, after it has
+         been measured and before the crawl takes over; 0 = the crawl creep.
+         Off by default: 0.30 reaches the first riser 12 s sooner, but it
+         climbed 4 of 7 against 4 of 4 without it; see stairs.py. -->
+    <param name="stair_walkup_speed" value="$(arg stair_walkup_speed)"/>
+    <!-- The vertical muzzle scanner measures discrete risers. If scans are
+         missing or stale, a scanner-enabled traverse waits for fresh data. -->
+    <param name="use_stair_scanner" value="$(arg use_stair_scanner)"/>
+    <param name="stair_look_ahead"  value="1.6"/>
+    <!-- Smallest height change worth calling a step. Below it a flight is
+         just uneven ground, and chasing it would have the robot stopping to
+         measure the texture of the floor. -->
+    <param name="stair_min_rise"    value="0.025"/>
+    <!-- How much higher than the measured riser the foot is lifted, and the
+         cap on the result. A swing the leg cannot reach is a foot that never
+         rises, so both scale with the limb: passed in by sim.launch, which
+         knows which robot is underneath. -->
+    <param name="stair_clearance"   value="$(arg stair_clearance)"/>
+    <param name="stair_max_swing"   value="$(arg stair_max_swing)"/>
+    <!-- Staying on the centre line. A stepped climb corrects sideways rather
+         than by turning, because the drift it is correcting is itself
+         sideways and because a foot that meets a nosing crabbed catches the
+         corner instead of the face. -->
+    <param name="stair_strafe_gain" value="0.9"/>
+    <param name="stair_max_strafe"  value="0.20"/>
+  </node>
+</launch>

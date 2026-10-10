@@ -1,0 +1,116 @@
+<?xml version="1.0"?>
+<!--
+  Go2 with a stair scanner: one line of range readings swept down the
+  vertical plane straight ahead of the muzzle.
+
+  Built on go2_empty_world's controlled model, so the robot still walks; this
+  file only adds the sensing that lets it see what it is about to climb.
+
+  WHY THIS SENSOR AND NOT THE LIDAR IT ALREADY HAS
+
+  go2_security mounts a 2D lidar on the same muzzle, and it is useless here.
+  Its scan plane is horizontal, and a horizontal plane through a staircase
+  meets the risers and nothing else: every step returns the same "wall
+  straight ahead" it would return for an actual wall. Height is precisely the
+  dimension a level scan throws away, and height is the entire question.
+
+  So the plane is stood on end. The sensor link is rolled -90 degrees about
+  its own x axis, which maps the ray fan's sweep axis onto the robot's y axis
+  and leaves it sweeping in the x-z plane - forward and down. Beam angle then
+  reads as a depression angle below the horizon, and a beam that comes back
+  short is something sticking up in front of the robot.
+
+  Gazebo's ray sensor does support a <vertical> block, but
+  libgazebo_ros_laser.so only publishes the horizontal fan as a LaserScan.
+  Rolling the sensor is what gets a vertical profile out through the standard
+  plugin, and it costs one rotation in the geometry rather than a custom
+  message and a custom plugin to carry it.
+-->
+<robot name="go2" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:include filename="$(find go2_empty_world)/xacro/go2_control.xacro"/>
+
+  <!-- 200 samples over the arc below is about 0.4 degrees per beam, which at
+       half a metre resolves 4 mm of height. The risers are 90 mm. -->
+  <xacro:arg name="stair_scan_samples" default="200"/>
+  <xacro:arg name="stair_scan_range" default="4.0"/>
+  <!-- Display-only debug aid; publishing remains active when this is false. -->
+  <xacro:arg name="stair_scan_visualize" default="false"/>
+
+  <!--
+    Mounted where go2_description already puts `front_camera`, on the muzzle,
+    because that is where the real Go2's forward depth camera lives - the
+    sensor a physical robot would actually use for this.
+
+    The roll is the working part. -pi/2 about x sends the fan's local +y to
+    the robot's -z, so a beam at scan angle a points along
+    (cos a, 0, -sin a) in the trunk frame: a = 0 is level ahead and a = 1.45
+    is nearly straight down at the toes.
+  -->
+  <joint name="stair_scanner_joint" type="fixed">
+    <parent link="trunk"/>
+    <child link="stair_scanner"/>
+    <origin rpy="-1.5707963 0 0" xyz="0.32715 0 0.04297"/>
+  </joint>
+
+  <link name="stair_scanner">
+    <visual>
+      <origin rpy="1.5707963 0 0" xyz="0 0 0"/>
+      <geometry>
+        <box size="0.018 0.055 0.026"/>
+      </geometry>
+      <material name="scanner_dark">
+        <color rgba="0.12 0.13 0.16 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.05"/>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
+    </inertial>
+  </link>
+
+  <gazebo reference="stair_scanner">
+    <material>Gazebo/DarkGrey</material>
+    <sensor name="stair_scanner" type="ray">
+      <pose>0 0 0 0 0 0</pose>
+      <visualize>$(arg stair_scan_visualize)</visualize>
+      <!-- Fast, because it is read while the robot is creeping and each
+           reading is only trusted after several agree. -->
+      <update_rate>20</update_rate>
+      <ray>
+        <scan>
+          <horizontal>
+            <samples>$(arg stair_scan_samples)</samples>
+            <resolution>1</resolution>
+            <!-- A little above the horizon, so a wall reads as a wall and
+                 not as a step too tall to measure, down to 83 degrees, which
+                 lands just in front of the front feet and gives the profile
+                 the ground the robot is standing on to measure from. -->
+            <min_angle>-0.20</min_angle>
+            <max_angle>1.45</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.04</min>
+          <max>$(arg stair_scan_range)</max>
+          <resolution>0.005</resolution>
+        </range>
+        <!-- 3 mm. Real depth sensors are far noisier than this at half a
+             metre; the profile fits a line to each tread rather than
+             trusting single beams, so the number it has to survive is the
+             spread across a tread, not this. -->
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.003</stddev>
+        </noise>
+      </ray>
+      <plugin name="stair_scanner_controller" filename="libgazebo_ros_laser.so">
+        <topicName>/stair_scan</topicName>
+        <frameName>stair_scanner</frameName>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+</robot>

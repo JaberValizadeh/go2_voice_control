@@ -1,0 +1,154 @@
+<launch>
+  <!--
+    Voice control in a room with five solid 90 mm risers and 0.36 m treads.
+    A vertical scanner and foot contacts guide the stair crawl.
+
+      roslaunch go2_voice_control sim.launch
+      roslaunch go2_voice_control sim.launch world:=""       (bare floor)
+      roslaunch go2_voice_control sim.launch robot:=nova_q   (the other robot)
+
+    Say "go up" to climb and "come down" to descend. See the README.
+
+    THE ROBOT IS THE GO2
+
+    It was Nova-Q for a while, and the Go2 is back because the Go2 is the one
+    that climbs. `robot:=nova_q` still brings Nova-Q up and it walks, turns
+    and stops on voice exactly as before - but its stair crawl goes over on
+    the flat floor in front of the first riser, which is an open bug (see the
+    README). Defaulting to it meant "go up", the one thing this package is
+    for, failed unless you knew to pass an argument.
+
+    Everything in this package is robot-agnostic and always was: the teleop,
+    the interpreter, the stair planner and the profile reader talk to
+    /cmd_vel, /stair_scan, /stair_mode and /voice_commands, none of which
+    names a robot. Switching machines is therefore entirely a matter of which
+    stack this file brings up underneath, plus three numbers that describe
+    the robot's size, and every one of those is an `is_nova` conditional
+    below rather than an edit. That is the whole switch.
+
+    The three, and why they are not one:
+
+      * the level heights, because they are trunk heights and Nova-Q stands
+        31 mm taller;
+      * the stair swing limits, because they are reaches and Nova-Q's legs
+        are 10% longer;
+      * the forward speed, because the two gaits saturate in different
+        places - see the sweep further down.
+
+    go2_gait.py's limb geometry used to be hardcoded to the Go2 and is now
+    parameters, defaulting to the Go2's, so this change does not touch it.
+    Nova-Q passes its own from nova_q_description/launch/nova_q_walk.launch.
+  -->
+  <arg name="robot" default="go2"/>
+  <arg name="gui" default="true"/>
+  <arg name="device" default="default"/>
+  <arg name="model_path" default="$(env HOME)/vosk-model-small-en-us-0.15"/>
+  <arg name="gain" default="1.0"/>
+  <arg name="command_timeout" default="5.0"/>
+  <arg name="start_recognizer" default="true"/>
+  <arg name="world"
+       default="$(find go2_voice_control)/worlds/stair_room.world"/>
+  <arg name="use_stair_scanner" default="true"/>
+  <!-- Set show_scan:=true when the scanner's beam fan is needed for
+       debugging. The scan remains active when its visualization is hidden. -->
+  <arg name="show_scan" default="false"/>
+
+  <arg name="is_nova" value="$(eval arg('robot') == 'nova_q')"/>
+
+  <!--
+    The flight, in trunk heights. These are measured standing heights, not
+    nominal ones, because stairs.py compares the live trunk z against them
+    with a 0.06 m tolerance.
+
+    Nova-Q stands at 0.311 m under its gait against the Go2's 0.28; the
+    platform is 0.45 m in both cases, so the pair shifts together. Leaving
+    the Go2's numbers in place would have put the "arrived at the top"
+    threshold 50 mm low, and the climb would have declared victory one riser
+    early.
+
+    tools/make_room.py prints the platform height for whatever world is
+    built.
+  -->
+  <arg name="stair_foot"     default="[2.20, 0.0]"/>
+  <arg name="stair_top"      default="[4.00, 0.0]"/>
+  <arg name="stair_bottom_z" default="$(eval 0.31 if arg('is_nova') else 0.30)"/>
+  <arg name="stair_top_z"    default="$(eval 0.76 if arg('is_nova') else 0.75)"/>
+  <arg name="stair_heading"  default="0.0"/>
+
+  <!-- Foot lift while climbing: how much higher than the measured riser the
+       foot goes, and the cap on the result. Both are reaches, so both scale
+       with the limb - Nova-Q has 0.434 m of knee-limited reach and stands at
+       0.29 m of it, against the Go2's 0.389 m and 0.26 m. -->
+  <arg name="stair_clearance" default="$(eval 0.050 if arg('is_nova') else 0.045)"/>
+  <arg name="stair_max_swing" default="$(eval 0.20 if arg('is_nova') else 0.18)"/>
+
+  <!--
+    What "move forward" asks for.
+
+    Nova-Q is asked for far less than the Go2, and it is not slower for it.
+    Its gait saturates around 0.30 m/s, so a larger command buys no ground
+    and costs the straight line - measured over 9 s on bare floor, commanded
+    against achieved, with worst yaw wander:
+
+      0.35 -> 0.24 m/s,  4 deg,  0.00 m sideways
+      0.40 -> 0.29 m/s, 12 deg, -0.28 m
+      0.45 -> 0.29 m/s, 10 deg, +0.36 m
+      0.60 -> 0.31 m/s, 26 deg, -0.37 m     <- the Go2's setting
+
+    Commanding a gait past what it can deliver does not make a robot quick,
+    it makes it wander, and a voice-driven robot that does not go where it
+    was pointed is worse than a slow one. A trot is marginally stable and
+    these vary run to run; the trend does not.
+  -->
+  <!-- Faster walk-up to the stairs, in m/s; 0 = off. Experimental: see
+       the note at stair_walkup_speed in voice_control.launch. -->
+  <arg name="stair_walkup_speed" default="0.0"/>
+  <arg name="linear_speed"     default="$(eval 0.35 if arg('is_nova') else 0.60)"/>
+  <arg name="max_linear_speed" default="$(eval 0.45 if arg('is_nova') else 0.65)"/>
+
+  <!-- ================= Nova-Q ================= -->
+  <include if="$(arg is_nova)"
+           file="$(find nova_q_description)/launch/nova_q_walk.launch">
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="world" value="$(arg world)"/>
+    <arg name="x" value="-1.0"/>
+    <arg name="y" value="0.0"/>
+    <arg name="model_xacro"
+         value="$(find nova_q_description)/xacro/nova_q_stair_sensors.xacro"/>
+    <arg name="xacro_args"
+         value="foot_contacts:=true stair_scan_visualize:=$(arg show_scan)"/>
+  </include>
+
+  <!-- ================= Go2 ================= -->
+  <include unless="$(arg is_nova)"
+           file="$(find go2_empty_world)/launch/go2_walk.launch">
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="world" value="$(arg world)"/>
+    <arg name="x" value="-1.0"/>
+    <arg name="y" value="0.0"/>
+    <arg name="model_xacro"
+         value="$(find go2_voice_control)/xacro/go2_stair_sensors.xacro"/>
+    <arg name="xacro_args"
+         value="foot_contacts:=true stair_scan_visualize:=$(arg show_scan)"/>
+  </include>
+
+  <include file="$(find go2_voice_control)/launch/voice_control.launch">
+    <arg name="device" value="$(arg device)"/>
+    <arg name="model_path" value="$(arg model_path)"/>
+    <arg name="gain" value="$(arg gain)"/>
+    <arg name="command_timeout" value="$(arg command_timeout)"/>
+    <arg name="start_recognizer" value="$(arg start_recognizer)"/>
+    <arg name="use_stair_scanner" value="$(arg use_stair_scanner)"/>
+    <arg name="model_name" value="$(eval 'nova_q' if arg('is_nova') else 'unitree_go2')"/>
+    <arg name="stair_foot" value="$(arg stair_foot)"/>
+    <arg name="stair_top" value="$(arg stair_top)"/>
+    <arg name="stair_bottom_z" value="$(arg stair_bottom_z)"/>
+    <arg name="stair_top_z" value="$(arg stair_top_z)"/>
+    <arg name="stair_heading" value="$(arg stair_heading)"/>
+    <arg name="stair_clearance" value="$(arg stair_clearance)"/>
+    <arg name="stair_max_swing" value="$(arg stair_max_swing)"/>
+    <arg name="stair_walkup_speed" value="$(arg stair_walkup_speed)"/>
+    <arg name="linear_speed" value="$(arg linear_speed)"/>
+    <arg name="max_linear_speed" value="$(arg max_linear_speed)"/>
+  </include>
+</launch>

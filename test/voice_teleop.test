@@ -1,0 +1,23 @@
+<launch>
+  <!--
+    Integration test for voice_teleop. The recognizer is deliberately absent:
+    it needs a microphone and a downloaded Vosk model, and the decisions under
+    test all live in the teleop node, which is driven here by publishing
+    /voice_commands directly.
+  -->
+  <node pkg="go2_voice_control" type="voice_teleop.py"
+        name="go2_voice_teleop" output="screen">
+    <env name="PYTHONUNBUFFERED" value="1"/>
+    <param name="linear_speed" value="0.2"/>
+    <param name="angular_speed" value="0.4"/>
+    <param name="max_linear_speed" value="0.4"/>
+    <param name="max_angular_speed" value="0.8"/>
+    <!-- Short, so the timeout test does not have to wait 5 s, and so the
+         half-turn regression is provoked reliably. -->
+    <param name="command_timeout" value="2.0"/>
+    <param name="publish_rate" value="20.0"/>
+  </node>
+
+  <test test-name="test_voice_teleop" pkg="go2_voice_control"
+        type="test_voice_teleop.py" time-limit="180.0"/>
+</launch>
